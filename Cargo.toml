@@ -1,0 +1,23 @@
+[package]
+name = "sql2all"
+version = "0.1.0"
+edition = "2021"
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.86"
+arrow = "51.0.0"
+arrow-array = "51.0.0"
+clap = { version = "4.5.6", features = ["derive"] }
+futures = "0.3.30"
+mysql_async = "0.34.1"
+parquet = { version = "51.0.0", features = ["async", "arrow"] }
+parquet_derive = "51.0.0"
+rand = "0.8.5"
+serde = { version = "1.0.203", features = ["derive"] }
+tokio = { version = "1.37.0", features = ["full"] }
+
+[profile.release]
+debug = true
