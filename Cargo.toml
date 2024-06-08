@@ -9,7 +9,6 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.86"
 arrow = "51.0.0"
-arrow-array = "51.0.0"
 clap = { version = "4.5.6", features = ["derive"] }
 futures = "0.3.30"
 mysql_async = "0.34.1"

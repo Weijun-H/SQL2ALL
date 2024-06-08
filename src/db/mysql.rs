@@ -7,7 +7,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::{fs, path::Path};
 
-use arrow_array::{ArrayRef, RecordBatch};
+use arrow::array::{ArrayRef, RecordBatch};
 use mysql_async::{prelude::*, Row};
 
 use crate::{FromArrow, OutputFormat, Query};
