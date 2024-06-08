@@ -1,7 +1,11 @@
 use std::{fs, path::Path, str::FromStr};
 
-use anyhow::Result;
-use arrow_array::RecordBatch;
+use anyhow::{Ok, Result};
+
+use arrow::{
+    array::RecordBatch,
+    json::{writer::LineDelimited, WriterBuilder},
+};
 use db::mysql::MySQL;
 use parquet::arrow::ArrowWriter;
 
@@ -77,10 +81,11 @@ impl FromStr for OutputFormat {
 
 impl FromArrow for OutputFormat {
     fn write(&self, batches: Vec<&RecordBatch>, path: &Path) -> Result<()> {
+        let file = fs::File::options().append(true).open(path)?;
+
         match self {
             OutputFormat::Parquet => {
                 // write to parquet
-                let file = fs::File::options().append(true).open(path)?;
                 let mut writer = ArrowWriter::try_new(file, batches[0].schema(), None)?;
 
                 for batch in batches {
@@ -88,6 +93,24 @@ impl FromArrow for OutputFormat {
                 }
                 writer.close()?;
 
+                Ok(())
+            }
+            OutputFormat::Csv => {
+                // write to csv
+                let mut writer = arrow::csv::writer::Writer::new(file);
+                for batch in batches {
+                    writer.write(batch)?
+                }
+                Ok(())
+            }
+            OutputFormat::Json => {
+                // write to json
+                // create a builder that keeps keys with null values
+                let builder = WriterBuilder::new().with_explicit_nulls(true);
+                let mut writer = builder.build::<_, LineDelimited>(file);
+
+                writer.write_batches(&batches)?;
+                writer.finish()?;
                 Ok(())
             }
             format => unimplemented!("Output format not supported: {:?}", format),
