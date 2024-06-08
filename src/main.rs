@@ -1,8 +1,10 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, str::FromStr};
 
 use clap::Parser;
+use sql2all::Database;
 
-/// Simple program to greet a person
+use anyhow::Result;
+
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -15,10 +17,15 @@ struct Args {
     output: PathBuf,
 
     /// SQL query to execute
-    #[arg()]
+    #[arg(short, long)]
     query: String,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Args::parse();
+    let db = Database::from_str(args.url.as_deref().unwrap()).unwrap();
+
+    db.query(&args.query, &args.output).await?;
+    Ok(())
 }

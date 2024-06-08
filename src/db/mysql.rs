@@ -3,64 +3,65 @@ use arrow::array::*;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch;
 use futures::StreamExt;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::{fs, path::Path};
 
 use arrow_array::{ArrayRef, RecordBatch};
 use mysql_async::{prelude::*, Row};
-use parquet::arrow::ArrowWriter;
-use rand::Rng;
-use serde::Serialize;
 
-// only for testing
-#[derive(Serialize, Clone, Debug, ParquetRecordWriter)]
-pub struct Payment {
-    pub customer_id: i32,
-    pub amount: i32,
-    pub account_name: Option<String>,
+use crate::{FromArrow, OutputFormat, Query};
+
+pub struct MySQL {
+    url: String,
 }
 
-/// Write the given data to the passed buffer
-async fn write_to_parquet(batches: Vec<RecordBatch>, path: &Path) -> Result<()> {
-    let batches_clone = batches.clone();
-    let file = fs::File::options().append(true).open(path).unwrap();
-    let mut writer = ArrowWriter::try_new(file, batches_clone[0].schema(), None)?;
-
-    for batch in &batches_clone {
-        writer.write(batch)?
+impl MySQL {
+    pub fn new(url: String) -> Self {
+        MySQL { url }
     }
-    writer.close()?;
-
-    Ok(())
 }
 
-fn generate_test_data(size: usize) -> Vec<Payment> {
-    let mut rng = rand::thread_rng();
-    let mut payments: Vec<Payment> = Vec::with_capacity(size);
+impl Query for MySQL {
+    async fn query(&self, query: &str, output: &Path) -> Result<()> {
+        println!("Querying MySQL database with query: {}", query);
 
-    for _ in 0..size {
-        let customer_id = rng.gen_range(1..1000);
-        let amount = rng.gen_range(10..1000);
+        let pool = mysql_async::Pool::new(self.url.clone().as_str());
+        let mut conn = pool.get_conn().await?;
 
-        let account_name = if rng.gen::<bool>() {
-            Some(format!("Account {}", rng.gen_range(1..100)))
-        } else {
-            None
-        };
+        let format = OutputFormat::from_str(output.to_str().expect("Invalid output format"))?;
 
-        let payment = Payment {
-            customer_id,
-            amount,
-            account_name,
-        };
+        // TODO: customize the query
+        let mut stream = conn.query_iter(query).await?;
+        let mut stream = stream
+            .stream::<Row>()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("No rows"))?;
 
-        payments.push(payment);
+        fs::File::create(output)?;
+
+        let mut batches = vec![];
+        while let Some(row) = stream.next().await {
+            let batch = convert_to_recordbatch(row?).await?;
+            batches.push(batch);
+
+            // write the batches to the parquet file
+            // TODO: customize the batch size
+            if batches.len() == 500_000 {
+                println!("Batch size: {}", batches.len());
+                // TODO: speed up the writing process, e.g. by using a thread pool
+                format.write(batches.iter().collect(), output)?;
+                batches.clear();
+            }
+        }
+        if !batches.is_empty() {
+            format.write(batches.iter().collect(), output)?;
+        }
+        Ok(())
     }
-
-    payments
 }
 
-async fn change_row_to_record_batch(row: Row) -> Result<RecordBatch> {
+async fn convert_to_recordbatch(row: Row) -> Result<RecordBatch> {
     let mut schemas: Vec<Field> = vec![];
 
     row.columns().iter().for_each(|column| {
@@ -130,30 +131,42 @@ fn map_column_type_to_arrow_data_type(column_type: mysql_async::consts::ColumnTy
     }
 }
 
-pub async fn convert(url: &str, output: &Path, query: &str) -> Result<()> {
-    let pool = mysql_async::Pool::new(url);
-    let mut conn = pool.get_conn().await?;
+#[cfg(test)]
+mod tests {
+    use rand::Rng;
+    use serde::Serialize;
 
-    // TODO: customize the query
-    let mut stream = conn.query_iter(query).await?;
-    let mut stream = stream
-        .stream::<Row>()
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("No rows"))?;
-
-    fs::File::create(output)?;
-
-    let mut batches = vec![];
-    while let Some(row) = stream.next().await {
-        let batch = change_row_to_record_batch(row?).await?;
-        batches.push(batch);
-
-        // write the batches to the parquet file
-        // TODO: customize the batch size
-        if batches.len() == 1_000_000 {
-            write_to_parquet(batches.clone(), output).await?;
-            batches.clear();
-        }
+    // only for testing
+    #[derive(Serialize, Clone, Debug, ParquetRecordWriter)]
+    pub struct Payment {
+        pub customer_id: i32,
+        pub amount: i32,
+        pub account_name: Option<String>,
     }
-    Ok(())
+
+    fn generate_test_data(size: usize) -> Vec<Payment> {
+        let mut rng = rand::thread_rng();
+        let mut payments: Vec<Payment> = Vec::with_capacity(size);
+
+        for _ in 0..size {
+            let customer_id = rng.gen_range(1..1000);
+            let amount = rng.gen_range(10..1000);
+
+            let account_name = if rng.gen::<bool>() {
+                Some(format!("Account {}", rng.gen_range(1..100)))
+            } else {
+                None
+            };
+
+            let payment = Payment {
+                customer_id,
+                amount,
+                account_name,
+            };
+
+            payments.push(payment);
+        }
+
+        payments
+    }
 }
