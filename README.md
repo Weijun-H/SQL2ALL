@@ -1,8 +1,8 @@
 <!-- add logo -->
 
-<div style="text-align: center;">
+<p align="center">
     <img src="img/logo.png" alt="Image" height="250">
-</div>
+</p>
 
 # SQL2ALL
 
