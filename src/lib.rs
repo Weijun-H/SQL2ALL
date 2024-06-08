@@ -1,4 +1,8 @@
-use std::{fs, path::Path, str::FromStr};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use anyhow::{Ok, Result};
 
@@ -22,11 +26,11 @@ pub enum Database {
 }
 
 trait Query {
-    async fn query(&self, query: &str, output: &Path) -> Result<()>;
+    async fn query(&self, query: &str, output: &PathBuf) -> Result<()>;
 }
 
 impl Database {
-    pub async fn query(&self, query: &str, output: &Path) -> Result<()> {
+    pub async fn query(&self, query: &str, output: &PathBuf) -> Result<()> {
         match self {
             Database::MySQL(mysql) => mysql.query(query, output).await,
             Database::Postgres => unimplemented!("Postgres not implemented"),
@@ -52,7 +56,7 @@ impl FromStr for Database {
 }
 
 trait FromArrow {
-    fn write(&self, batches: Vec<&RecordBatch>, output: &Path) -> Result<()>;
+    async fn write(&self, batches: Vec<RecordBatch>, output: &Path) -> Result<()>;
 }
 
 #[derive(Debug)]
@@ -80,7 +84,7 @@ impl FromStr for OutputFormat {
 }
 
 impl FromArrow for OutputFormat {
-    fn write(&self, batches: Vec<&RecordBatch>, path: &Path) -> Result<()> {
+    async fn write(&self, batches: Vec<RecordBatch>, path: &Path) -> Result<()> {
         let file = fs::File::options().append(true).open(path)?;
 
         match self {
@@ -89,7 +93,7 @@ impl FromArrow for OutputFormat {
                 let mut writer = ArrowWriter::try_new(file, batches[0].schema(), None)?;
 
                 for batch in batches {
-                    writer.write(batch)?
+                    writer.write(&batch)?
                 }
                 writer.close()?;
 
@@ -99,7 +103,7 @@ impl FromArrow for OutputFormat {
                 // write to csv
                 let mut writer = arrow::csv::writer::Writer::new(file);
                 for batch in batches {
-                    writer.write(batch)?
+                    writer.write(&batch)?
                 }
                 Ok(())
             }
@@ -109,7 +113,9 @@ impl FromArrow for OutputFormat {
                 let builder = WriterBuilder::new().with_explicit_nulls(true);
                 let mut writer = builder.build::<_, LineDelimited>(file);
 
-                writer.write_batches(&batches)?;
+                for batch in batches {
+                    writer.write(&batch)?
+                }
                 writer.finish()?;
                 Ok(())
             }
