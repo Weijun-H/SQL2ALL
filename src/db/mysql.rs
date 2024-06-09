@@ -22,6 +22,88 @@ impl MySQL {
     pub fn new(url: String) -> Self {
         MySQL { url }
     }
+    fn map_arrow_type(columns: Arc<[Column]>) -> Arc<Schema> {
+        let mut fields = Vec::<Field>::new();
+        for column in columns.iter() {
+            let data_type = match column.column_type() {
+                mysql_async::consts::ColumnType::MYSQL_TYPE_INT24 => {
+                    arrow::datatypes::DataType::Int32
+                }
+                mysql_async::consts::ColumnType::MYSQL_TYPE_LONG => {
+                    arrow::datatypes::DataType::Int32
+                }
+                mysql_async::consts::ColumnType::MYSQL_TYPE_FLOAT => {
+                    arrow::datatypes::DataType::Float64
+                }
+                mysql_async::consts::ColumnType::MYSQL_TYPE_NEWDECIMAL => {
+                    arrow::datatypes::DataType::Float64
+                }
+                mysql_async::consts::ColumnType::MYSQL_TYPE_TIMESTAMP => {
+                    arrow::datatypes::DataType::Timestamp(
+                        arrow::datatypes::TimeUnit::Millisecond,
+                        None,
+                    )
+                }
+                mysql_async::consts::ColumnType::MYSQL_TYPE_VARCHAR => {
+                    arrow::datatypes::DataType::Utf8
+                }
+                mysql_async::consts::ColumnType::MYSQL_TYPE_VAR_STRING => {
+                    arrow::datatypes::DataType::Utf8
+                }
+                mysql_async::consts::ColumnType::MYSQL_TYPE_BLOB => {
+                    arrow::datatypes::DataType::Utf8
+                }
+                // Add more cases as needed for other data types
+                column_type => {
+                    unimplemented!("Data type not supported for column: {:?}", column_type)
+                }
+            };
+            fields.push(Field::new(column.name_str(), data_type, true));
+        }
+        Arc::new(Schema::new(fields))
+    }
+
+    fn convert_to_recordbatch(row: Row, schema: &Arc<Schema>) -> Result<RecordBatch> {
+        let mut columns = Vec::<ArrayRef>::new();
+
+        for (i, field) in schema.fields.iter().enumerate().take(row.len()) {
+            match field.data_type() {
+                DataType::Int32 => {
+                    let mut builder = Int32Builder::with_capacity(1);
+                    if let Some(value) = row.get::<i32, _>(i) {
+                        builder.append_value(value);
+                    } else {
+                        builder.append_null();
+                    }
+                    columns.append(&mut vec![Arc::new(builder.finish()) as ArrayRef]);
+                }
+                DataType::Int64 => {
+                    let mut builder = Int64Builder::with_capacity(1);
+                    if let Some(value) = row.get::<i64, _>(i) {
+                        builder.append_value(value);
+                    } else {
+                        builder.append_null();
+                    }
+                    columns.append(&mut vec![Arc::new(builder.finish()) as ArrayRef]);
+                }
+                DataType::Utf8 => {
+                    let mut builder = StringBuilder::new();
+                    if let Some(Ok(value)) = row.get_opt::<String, _>(i) {
+                        builder.append_value(value);
+                    } else {
+                        builder.append_null();
+                    }
+                    columns.append(&mut vec![Arc::new(builder.finish()) as ArrayRef]);
+                }
+                // Add more cases as needed for other data types
+                data_type => unimplemented!("Data type not supported for column: {:?}", data_type),
+            };
+        }
+
+        let record_batch = record_batch::RecordBatch::try_new(schema.clone(), columns)?;
+
+        Ok(record_batch)
+    }
 }
 
 impl Query for MySQL {
@@ -45,10 +127,10 @@ impl Query for MySQL {
         fs::File::create(output.clone())?;
 
         let mut batches = vec![];
-        let schema = map_schema(stream.columns());
+        let schema = MySQL::map_arrow_type(stream.columns());
 
         while let Some(row) = stream.next().await {
-            let batch = convert_to_recordbatch(row?, &schema).await?;
+            let batch = MySQL::convert_to_recordbatch(row?, &schema)?;
             batches.push(batch);
 
             // write the batches to the parquet file
@@ -76,76 +158,6 @@ impl Query for MySQL {
         println!("Done writing to file: {:?}", output);
         Ok(())
     }
-}
-
-async fn convert_to_recordbatch(row: Row, schema: &Arc<Schema>) -> Result<RecordBatch> {
-    let mut columns = Vec::<ArrayRef>::new();
-
-    for (i, field) in schema.fields.iter().enumerate().take(row.len()) {
-        match field.data_type() {
-            DataType::Int32 => {
-                let mut builder = Int32Builder::with_capacity(1);
-                if let Some(value) = row.get::<i32, _>(i) {
-                    builder.append_value(value);
-                } else {
-                    builder.append_null();
-                }
-                columns.append(&mut vec![Arc::new(builder.finish()) as ArrayRef]);
-            }
-            DataType::Int64 => {
-                let mut builder = Int64Builder::with_capacity(1);
-                if let Some(value) = row.get::<i64, _>(i) {
-                    builder.append_value(value);
-                } else {
-                    builder.append_null();
-                }
-                columns.append(&mut vec![Arc::new(builder.finish()) as ArrayRef]);
-            }
-            DataType::Utf8 => {
-                let mut builder = StringBuilder::new();
-                if let Some(Ok(value)) = row.get_opt::<String, _>(i) {
-                    builder.append_value(value);
-                } else {
-                    builder.append_null();
-                }
-                columns.append(&mut vec![Arc::new(builder.finish()) as ArrayRef]);
-            }
-            // Add more cases as needed for other data types
-            data_type => unimplemented!("Data type not supported for column: {:?}", data_type),
-        };
-    }
-
-    let record_batch = record_batch::RecordBatch::try_new(schema.clone(), columns)?;
-
-    Ok(record_batch)
-}
-
-fn map_schema(columns: Arc<[Column]>) -> Arc<Schema> {
-    let mut fields = Vec::<Field>::new();
-    for column in columns.iter() {
-        let data_type = match column.column_type() {
-            mysql_async::consts::ColumnType::MYSQL_TYPE_INT24 => arrow::datatypes::DataType::Int32,
-            mysql_async::consts::ColumnType::MYSQL_TYPE_LONG => arrow::datatypes::DataType::Int32,
-            mysql_async::consts::ColumnType::MYSQL_TYPE_FLOAT => {
-                arrow::datatypes::DataType::Float64
-            }
-            mysql_async::consts::ColumnType::MYSQL_TYPE_NEWDECIMAL => {
-                arrow::datatypes::DataType::Float64
-            }
-            mysql_async::consts::ColumnType::MYSQL_TYPE_TIMESTAMP => {
-                arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None)
-            }
-            mysql_async::consts::ColumnType::MYSQL_TYPE_VARCHAR => arrow::datatypes::DataType::Utf8,
-            mysql_async::consts::ColumnType::MYSQL_TYPE_VAR_STRING => {
-                arrow::datatypes::DataType::Utf8
-            }
-            mysql_async::consts::ColumnType::MYSQL_TYPE_BLOB => arrow::datatypes::DataType::Utf8,
-            // Add more cases as needed for other data types
-            column_type => unimplemented!("Data type not supported for column: {:?}", column_type),
-        };
-        fields.push(Field::new(column.name_str(), data_type, true));
-    }
-    Arc::new(Schema::new(fields))
 }
 
 #[cfg(test)]
