@@ -11,6 +11,7 @@ use arrow::{
     json::{writer::LineDelimited, WriterBuilder},
 };
 use db::mysql::MySQL;
+use db::postgresql::PostgreSQL;
 use parquet::arrow::ArrowWriter;
 
 extern crate parquet;
@@ -21,7 +22,7 @@ mod db;
 
 pub enum Database {
     MySQL(MySQL),
-    Postgres,
+    PostgreSQL(PostgreSQL),
     SQLite,
 }
 
@@ -33,7 +34,7 @@ impl Database {
     pub async fn query(&self, query: &str, output: &PathBuf) -> Result<()> {
         match self {
             Database::MySQL(mysql) => mysql.query(query, output).await,
-            Database::Postgres => unimplemented!("Postgres not implemented"),
+            Database::PostgreSQL(postgres) => postgres.query(query, output).await,
             Database::SQLite => unimplemented!("SQLite not implemented"),
         }
     }
@@ -48,7 +49,7 @@ impl FromStr for Database {
         match db_type {
             "mysql" => Ok(Database::MySQL(MySQL::new(s.to_string()))),
             // TODO: Implement Postgres and SQLite
-            "postgres" => Ok(Database::Postgres),
+            "postgresql" => Ok(Database::PostgreSQL(PostgreSQL::new(s.to_string()))),
             "sqlite" => Ok(Database::SQLite),
             format => Err(anyhow::anyhow!("Invalid database type: {}", format)),
         }
