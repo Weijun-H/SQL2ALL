@@ -24,7 +24,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let db = Database::from_str(args.url.as_deref().unwrap()).unwrap();
+    let db = Database::from_str(args.url.as_deref().unwrap_or("").to_string().as_str())?;
 
     db.query(&args.query, &args.output).await?;
     Ok(())
