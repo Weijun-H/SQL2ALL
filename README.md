@@ -11,8 +11,8 @@ SQL2ALL is a simple tool that allows you to store your SQL queries in any format
 Support for the following databases is included:
 
 - MySQL/MariaDB ([mysql_async](https://crates.io/crates/mysql_async))
-- PostgreSQL
-- SQLite
+- PostgreSQL ([tokio-postgres](https://crates.io/crates/tokio-postgres))
+- SQLite ([rusqlite](https://crates.io/crates/rusqlite))
 
 Support for the following output formats is included:
 

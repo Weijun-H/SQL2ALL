@@ -10,8 +10,8 @@ use arrow::{
     array::RecordBatch,
     json::{writer::LineDelimited, WriterBuilder},
 };
-use db::mysql::MySQL;
 use db::postgresql::PostgreSQL;
+use db::{mysql::MySQL, sqlite::SQLite};
 use parquet::arrow::ArrowWriter;
 
 extern crate parquet;
@@ -23,7 +23,7 @@ mod db;
 pub enum Database {
     MySQL(MySQL),
     PostgreSQL(PostgreSQL),
-    SQLite,
+    SQLite(SQLite),
 }
 
 trait Query {
@@ -35,7 +35,7 @@ impl Database {
         match self {
             Database::MySQL(mysql) => mysql.query(query, output).await,
             Database::PostgreSQL(postgres) => postgres.query(query, output).await,
-            Database::SQLite => unimplemented!("SQLite not implemented"),
+            Database::SQLite(sqlite) => sqlite.query(query, output).await,
         }
     }
 }
@@ -48,10 +48,12 @@ impl FromStr for Database {
         let db_type = s.split(':').next().unwrap();
         match db_type {
             "mysql" => Ok(Database::MySQL(MySQL::new(s.to_string()))),
-            // TODO: Implement Postgres and SQLite
             "postgresql" => Ok(Database::PostgreSQL(PostgreSQL::new(s.to_string()))),
-            "sqlite" => Ok(Database::SQLite),
-            format => Err(anyhow::anyhow!("Invalid database type: {}", format)),
+            "sqlite" => {
+                let path = s.strip_prefix("sqlite:///").unwrap_or(s);
+                Ok(Database::SQLite(SQLite::new(path.to_string())))
+            }
+            _ => Err(anyhow::anyhow!("Invalid database type: {}", db_type)),
         }
     }
 }

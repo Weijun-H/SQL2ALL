@@ -2,3 +2,4 @@
 *.parquet
 *.json
 *.csv
+*.db

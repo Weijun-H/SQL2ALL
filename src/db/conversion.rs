@@ -50,3 +50,19 @@ impl MapArrowType for mysql_async::Column {
         }
     }
 }
+
+impl MapArrowType for rusqlite::Column<'_> {
+    fn map_arrow_type(&self) -> DataType {
+        match self.decl_type() {
+            Some("INTEGER") => DataType::Int64,
+            Some("TEXT") => DataType::Utf8,
+            Some("REAL") => DataType::Float64,
+            Some("BLOB") => DataType::Binary,
+            Some("NULL") => DataType::Null,
+            // Add more cases as needed for other data types
+            column_type => {
+                unimplemented!("Data type not supported for column: {:?}", column_type)
+            }
+        }
+    }
+}

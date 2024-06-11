@@ -15,6 +15,7 @@ futures-util = "0.3.30"
 mysql_async = "0.34.1"
 parquet = { version = "51.0.0", features = ["async", "arrow"] }
 parquet_derive = "51.0.0"
+rusqlite = {version = "0.31.0", features = ["column_decltype"] }
 tokio = { version = "1.37.0", features = ["full"] }
 tokio-postgres = "0.7.10"
 

@@ -22,7 +22,7 @@ impl PostgreSQL {
     }
 
     /// Convert a PostgreSQL row to Arrow RecordBatch
-    fn convert_to_recordbatch(row: Row, schema: &Arc<Schema>) -> Result<RecordBatch> {
+    fn convert_to_recordbatch(row: &Row, schema: &Arc<Schema>) -> Result<RecordBatch> {
         let mut columns = Vec::<ArrayRef>::new();
 
         for (i, field) in schema.fields.iter().enumerate().take(row.len()) {
@@ -114,7 +114,7 @@ impl Query for PostgreSQL {
             }
 
             let batch = PostgreSQL::convert_to_recordbatch(
-                row,
+                &row,
                 &schema.clone().ok_or(anyhow::anyhow!("No schema"))?,
             )?;
             batches.push(batch);
