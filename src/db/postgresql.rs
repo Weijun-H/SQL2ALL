@@ -1,4 +1,3 @@
-use crate::FromArrow;
 use anyhow::Result;
 use arrow::{
     array::{ArrayRef, Int32Builder, Int64Builder, RecordBatch, StringBuilder},
@@ -7,9 +6,11 @@ use arrow::{
 };
 use futures_util::{pin_mut, TryStreamExt};
 use std::{fs, path::PathBuf, str::FromStr, sync::Arc};
-use tokio_postgres::{types::Type, Row};
+use tokio_postgres::{Column, Row};
 
-use crate::{OutputFormat, Query};
+use crate::{OutputFormat, OutputWriter, Query};
+
+use super::conversion::MapArrowType;
 
 pub struct PostgreSQL {
     url: String,
@@ -20,35 +21,7 @@ impl PostgreSQL {
         PostgreSQL { url }
     }
 
-    fn map_arrow_type(columns: &[tokio_postgres::Column]) -> Arc<Schema> {
-        let fields = columns
-            .iter()
-            .map(|column| {
-                let name = column.name();
-                let data_type = match column.type_() {
-                    &Type::BOOL => DataType::Boolean,
-                    &Type::INT2 => DataType::Int16,
-                    &Type::INT4 => DataType::Int32,
-                    &Type::FLOAT4 => DataType::Float32,
-                    &Type::FLOAT8 => DataType::Float64,
-                    &Type::BIT => DataType::Binary,
-                    &Type::NUMERIC => DataType::Float64,
-                    &Type::DATE => DataType::Date32,
-                    &Type::TIME => DataType::Time32(arrow::datatypes::TimeUnit::Second),
-                    &Type::VARCHAR => DataType::Utf8,
-                    &Type::TIMESTAMP => {
-                        DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None)
-                    }
-                    // Add more cases as needed for other data types
-                    column_type => {
-                        unimplemented!("Data type not supported for column: {:?}", column_type)
-                    }
-                };
-                Field::new(name, data_type, true)
-            })
-            .collect::<Vec<Field>>();
-        Arc::new(Schema::new(fields))
-    }
+    /// Convert a PostgreSQL row to Arrow RecordBatch
     fn convert_to_recordbatch(row: Row, schema: &Arc<Schema>) -> Result<RecordBatch> {
         let mut columns = Vec::<ArrayRef>::new();
 
@@ -90,6 +63,18 @@ impl PostgreSQL {
 
         Ok(record_batch)
     }
+
+    /// Map the PostgreSQL columns to Arrow Schema
+    fn map_scheme(columns: &[Column]) -> Arc<Schema> {
+        let fields = columns
+            .iter()
+            .map(|column| {
+                let data_type = column.map_arrow_type();
+                Field::new(column.name(), data_type, true)
+            })
+            .collect::<Vec<Field>>();
+        Arc::new(Schema::new(fields))
+    }
 }
 
 impl Query for PostgreSQL {
@@ -125,7 +110,7 @@ impl Query for PostgreSQL {
 
         while let Some(row) = stream.try_next().await? {
             if schema.is_none() {
-                schema = Some(PostgreSQL::map_arrow_type(row.columns()));
+                schema = Some(PostgreSQL::map_scheme(row.columns()));
             }
 
             let batch = PostgreSQL::convert_to_recordbatch(

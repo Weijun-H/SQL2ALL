@@ -40,7 +40,7 @@ impl Database {
     }
 }
 
-// From url to database
+/// From url to database
 impl FromStr for Database {
     type Err = anyhow::Error;
 
@@ -56,10 +56,12 @@ impl FromStr for Database {
     }
 }
 
-trait FromArrow {
+/// Writer for converting RecordBatch to output format
+trait OutputWriter {
     async fn write(&self, batches: Vec<RecordBatch>, output: &Path) -> Result<()>;
 }
 
+/// Format for writing the output
 #[derive(Debug)]
 enum OutputFormat {
     Parquet,
@@ -84,7 +86,7 @@ impl FromStr for OutputFormat {
     }
 }
 
-impl FromArrow for OutputFormat {
+impl OutputWriter for OutputFormat {
     async fn write(&self, batches: Vec<RecordBatch>, path: &Path) -> Result<()> {
         let file = fs::File::options().append(true).open(path)?;
 

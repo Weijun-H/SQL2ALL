@@ -12,7 +12,9 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, RecordBatch};
 use mysql_async::{prelude::*, Column, Row};
 
-use crate::{FromArrow, OutputFormat, Query};
+use crate::{OutputFormat, OutputWriter, Query};
+
+use super::conversion::MapArrowType;
 
 pub struct MySQL {
     url: String,
@@ -21,46 +23,6 @@ pub struct MySQL {
 impl MySQL {
     pub fn new(url: String) -> Self {
         MySQL { url }
-    }
-    fn map_arrow_type(columns: Arc<[Column]>) -> Arc<Schema> {
-        let mut fields = Vec::<Field>::new();
-        for column in columns.iter() {
-            let data_type = match column.column_type() {
-                mysql_async::consts::ColumnType::MYSQL_TYPE_INT24 => {
-                    arrow::datatypes::DataType::Int32
-                }
-                mysql_async::consts::ColumnType::MYSQL_TYPE_LONG => {
-                    arrow::datatypes::DataType::Int32
-                }
-                mysql_async::consts::ColumnType::MYSQL_TYPE_FLOAT => {
-                    arrow::datatypes::DataType::Float64
-                }
-                mysql_async::consts::ColumnType::MYSQL_TYPE_NEWDECIMAL => {
-                    arrow::datatypes::DataType::Float64
-                }
-                mysql_async::consts::ColumnType::MYSQL_TYPE_TIMESTAMP => {
-                    arrow::datatypes::DataType::Timestamp(
-                        arrow::datatypes::TimeUnit::Millisecond,
-                        None,
-                    )
-                }
-                mysql_async::consts::ColumnType::MYSQL_TYPE_VARCHAR => {
-                    arrow::datatypes::DataType::Utf8
-                }
-                mysql_async::consts::ColumnType::MYSQL_TYPE_VAR_STRING => {
-                    arrow::datatypes::DataType::Utf8
-                }
-                mysql_async::consts::ColumnType::MYSQL_TYPE_BLOB => {
-                    arrow::datatypes::DataType::Utf8
-                }
-                // Add more cases as needed for other data types
-                column_type => {
-                    unimplemented!("Data type not supported for column: {:?}", column_type)
-                }
-            };
-            fields.push(Field::new(column.name_str(), data_type, true));
-        }
-        Arc::new(Schema::new(fields))
     }
 
     fn convert_to_recordbatch(row: Row, schema: &Arc<Schema>) -> Result<RecordBatch> {
@@ -104,6 +66,15 @@ impl MySQL {
 
         Ok(record_batch)
     }
+
+    fn map_schema(columns: &[Column]) -> Arc<Schema> {
+        let mut fields = Vec::<Field>::new();
+        for column in columns.iter() {
+            let data_type = column.map_arrow_type();
+            fields.push(Field::new(column.name_str(), data_type, true));
+        }
+        Arc::new(Schema::new(fields))
+    }
 }
 
 impl Query for MySQL {
@@ -127,7 +98,7 @@ impl Query for MySQL {
         fs::File::create(output.clone())?;
 
         let mut batches = vec![];
-        let schema = MySQL::map_arrow_type(stream.columns());
+        let schema = MySQL::map_schema(&stream.columns());
 
         while let Some(row) = stream.next().await {
             let batch = MySQL::convert_to_recordbatch(row?, &schema)?;
