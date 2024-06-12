@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf, str::FromStr, sync::Arc};
 
-use crate::{OutputFormat, OutputWriter, Query};
+use crate::{OutputFormat, Query};
 
 use anyhow::Result;
 use arrow::{
@@ -9,6 +9,7 @@ use arrow::{
     record_batch,
 };
 use rusqlite::{Column, Connection, Row};
+use tokio::sync::mpsc;
 
 use super::conversion::MapArrowType;
 
@@ -77,36 +78,23 @@ impl Query for SQLite {
 
         let mut stmt = conn.prepare(query)?;
 
-        let mut batches = vec![];
         let schema = SQLite::map_schema(&stmt.columns());
         let mut stream = stmt.query([])?;
 
+        let (tx, rx) = mpsc::channel(100);
+
+        let output_cloned = output.clone();
+        let schema_cloned = schema.clone();
+        let write =
+            tokio::spawn(async move { format.write(rx, schema_cloned, &output_cloned).await });
+
         while let Some(row) = stream.next()? {
             let batch = SQLite::convert_to_recordbatch(row, &schema)?;
-            batches.push(batch);
-
-            // write the batches to the parquet file
-            // TODO: customize the batch size
-            // TODO: avoid race condition
-            if batches.len() == 100_000 {
-                let batches_clone = batches.clone();
-                let format_clone = format.clone();
-                let output_clone = output.clone();
-
-                let task = tokio::task::spawn(async move {
-                    format_clone
-                        .write(batches_clone, &output_clone)
-                        .await
-                        .unwrap();
-                });
-                task.await?;
-                batches.clear();
-            }
+            tx.send(batch).await?;
         }
-        // write the remaining batches to the file
-        if !batches.is_empty() {
-            format.write(batches, output).await?;
-        }
+        drop(tx);
+        let _ = write.await?;
+
         println!("Done writing to file: {:?}", output);
         Ok(())
     }

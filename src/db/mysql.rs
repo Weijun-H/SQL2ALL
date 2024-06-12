@@ -2,8 +2,9 @@ use anyhow::Result;
 use arrow::array::*;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch;
-
 use futures::StreamExt;
+use tokio::sync::mpsc;
+
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -12,7 +13,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, RecordBatch};
 use mysql_async::{prelude::*, Column, Row};
 
-use crate::{OutputFormat, OutputWriter, Query};
+use crate::{OutputFormat, Query};
 
 use super::conversion::MapArrowType;
 
@@ -84,9 +85,7 @@ impl Query for MySQL {
         let pool = mysql_async::Pool::new(self.url.clone().as_str());
         let mut conn = pool.get_conn().await?;
 
-        let format = Arc::new(OutputFormat::from_str(
-            output.to_str().expect("Invalid output format"),
-        )?);
+        let format = OutputFormat::from_str(output.to_str().expect("Invalid output format"))?;
 
         // TODO: customize the query
         let mut stream = conn.query_iter(query).await?;
@@ -95,37 +94,23 @@ impl Query for MySQL {
             .await?
             .ok_or_else(|| anyhow::anyhow!("No rows"))?;
 
-        fs::File::create(output.clone())?;
-
-        let mut batches = vec![];
         let schema = MySQL::map_schema(&stream.columns());
+
+        let (tx, rx) = mpsc::channel(100);
+
+        let output_cloned = output.clone();
+        let schema_cloned = schema.clone();
+        fs::File::create(output.clone())?;
+        let write =
+            tokio::spawn(async move { format.write(rx, schema_cloned, &output_cloned).await });
 
         while let Some(row) = stream.next().await {
             let batch = MySQL::convert_to_recordbatch(&row?, &schema)?;
-            batches.push(batch);
-
-            // write the batches to the parquet file
-            // TODO: customize the batch size
-            // TODO: avoid race condition
-            if batches.len() == 100_000 {
-                let batches_clone = batches.clone();
-                let format_clone = format.clone();
-                let output_clone = output.clone();
-
-                let task = tokio::task::spawn(async move {
-                    format_clone
-                        .write(batches_clone, &output_clone)
-                        .await
-                        .unwrap();
-                });
-                task.await?;
-                batches.clear();
-            }
+            tx.send(batch).await?;
         }
-        // write the remaining batches to the file
-        if !batches.is_empty() {
-            format.write(batches, output).await?;
-        }
+        drop(tx);
+        let _ = write.await?;
+
         println!("Done writing to file: {:?}", output);
         Ok(())
     }
@@ -168,5 +153,24 @@ mod tests {
         }
 
         payments
+    }
+}
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn test() {
+        use parquet::file::reader::SerializedFileReader;
+        use std::convert::TryFrom;
+
+        let paths = vec!["test.parquet"];
+        // Create a reader for each file and flat map rows
+        let rows = paths
+            .iter()
+            .map(|p| SerializedFileReader::try_from(*p).unwrap())
+            .flat_map(|r| r.into_iter())
+            .collect::<Vec<_>>();
+
+        println!("Row len {}", rows.len());
     }
 }

@@ -6,9 +6,10 @@ use arrow::{
 };
 use futures_util::{pin_mut, TryStreamExt};
 use std::{fs, path::PathBuf, str::FromStr, sync::Arc};
+use tokio::sync::mpsc;
 use tokio_postgres::{Column, Row};
 
-use crate::{OutputFormat, OutputWriter, Query};
+use crate::{OutputFormat, Query};
 
 use super::conversion::MapArrowType;
 
@@ -93,54 +94,45 @@ impl Query for PostgreSQL {
             }
         });
 
-        let format = Arc::new(OutputFormat::from_str(
-            output.to_str().expect("Invalid output format"),
-        )?);
-
         // TODO: customize the query
         // Now we can execute a simple statement that just returns its parameter.
         let stream = client.query_raw(query, vec![""]).await?;
 
         pin_mut!(stream);
 
-        fs::File::create(output.clone())?;
+        let (tx, rx) = mpsc::channel(100);
 
-        let mut batches = vec![];
-        let mut schema: Option<Arc<Schema>> = None;
+        let output_cloned = output.clone();
+        let format = Arc::new(OutputFormat::from_str(
+            output.to_str().expect("Invalid output format"),
+        )?);
+
+        let mut schema: Arc<Schema> = Arc::new(Schema::new(vec![Field::new(
+            "column",
+            DataType::Utf8,
+            true,
+        )]));
+        fs::File::create(output.clone())?;
+        let mut write = tokio::spawn(async { Ok(()) });
+
+        if let Some(row) = stream.try_next().await? {
+            schema = PostgreSQL::map_scheme(row.columns());
+            let schema_clone = schema.clone();
+
+            write =
+                tokio::spawn(async move { format.write(rx, schema_clone, &output_cloned).await });
+
+            let batch = PostgreSQL::convert_to_recordbatch(&row, &schema)?;
+            tx.send(batch).await?;
+        }
 
         while let Some(row) = stream.try_next().await? {
-            if schema.is_none() {
-                schema = Some(PostgreSQL::map_scheme(row.columns()));
-            }
-
-            let batch = PostgreSQL::convert_to_recordbatch(
-                &row,
-                &schema.clone().ok_or(anyhow::anyhow!("No schema"))?,
-            )?;
-            batches.push(batch);
-
-            // write the batches to the parquet file
-            // TODO: customize the batch size
-            // TODO: avoid race condition
-            if batches.len() == 100_000 {
-                let batches_clone = batches.clone();
-                let format_clone = format.clone();
-                let output_clone = output.clone();
-
-                let task = tokio::task::spawn(async move {
-                    format_clone
-                        .write(batches_clone, &output_clone)
-                        .await
-                        .unwrap();
-                });
-                task.await?;
-                batches.clear();
-            }
+            let batch = PostgreSQL::convert_to_recordbatch(&row, &schema)?;
+            tx.send(batch).await?;
         }
-        // write the remaining batches to the file
-        if !batches.is_empty() {
-            format.write(batches, output).await?;
-        }
+        drop(tx);
+        let _ = write.await?;
+
         println!("Done writing to file: {:?}", output);
         Ok(())
     }
