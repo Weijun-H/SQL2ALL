@@ -8,11 +8,14 @@ use anyhow::{Ok, Result};
 
 use arrow::{
     array::RecordBatch,
+    datatypes::Schema,
     json::{writer::LineDelimited, WriterBuilder},
 };
 use db::postgresql::PostgreSQL;
 use db::{mysql::MySQL, sqlite::SQLite};
 use parquet::arrow::ArrowWriter;
+use std::sync::Arc;
+use tokio::sync::mpsc::Receiver;
 
 extern crate parquet;
 #[macro_use]
@@ -58,11 +61,6 @@ impl FromStr for Database {
     }
 }
 
-/// Writer for converting RecordBatch to output format
-trait OutputWriter {
-    async fn write(&self, batches: Vec<RecordBatch>, output: &Path) -> Result<()>;
-}
-
 /// Format for writing the output
 #[derive(Debug)]
 enum OutputFormat {
@@ -88,27 +86,35 @@ impl FromStr for OutputFormat {
     }
 }
 
-impl OutputWriter for OutputFormat {
-    async fn write(&self, batches: Vec<RecordBatch>, path: &Path) -> Result<()> {
-        let file = fs::File::options().append(true).open(path)?;
+impl OutputFormat {
+    async fn write(
+        &self,
+        mut rx: Receiver<RecordBatch>,
+        schema: Arc<Schema>,
+        path: &Path,
+    ) -> Result<()> {
+        let file = fs::File::options().write(true).open(path).unwrap();
 
         match self {
             OutputFormat::Parquet => {
                 // write to parquet
-                let mut writer = ArrowWriter::try_new(file, batches[0].schema(), None)?;
+                let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();
 
-                for batch in batches {
-                    writer.write(&batch)?
+                while !rx.is_closed() {
+                    if let Some(batch) = rx.recv().await {
+                        writer.write(&batch)?;
+                    }
                 }
                 writer.close()?;
-
                 Ok(())
             }
             OutputFormat::Csv => {
                 // write to csv
                 let mut writer = arrow::csv::writer::Writer::new(file);
-                for batch in batches {
-                    writer.write(&batch)?
+                while !rx.is_closed() {
+                    if let Some(batch) = rx.recv().await {
+                        writer.write(&batch).unwrap();
+                    }
                 }
                 Ok(())
             }
@@ -118,8 +124,10 @@ impl OutputWriter for OutputFormat {
                 let builder = WriterBuilder::new().with_explicit_nulls(true);
                 let mut writer = builder.build::<_, LineDelimited>(file);
 
-                for batch in batches {
-                    writer.write(&batch)?
+                while !rx.is_closed() {
+                    if let Some(batch) = rx.recv().await {
+                        writer.write(&batch).unwrap();
+                    }
                 }
                 writer.finish()?;
                 Ok(())
