@@ -48,7 +48,10 @@ impl FromStr for Database {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        let db_type = s.split(':').next().unwrap();
+        let db_type = s
+            .split(':')
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Invalid database url: {}", s))?;
         match db_type {
             "mysql" => Ok(Database::MySQL(MySQL::new(s.to_string()))),
             "postgresql" => Ok(Database::PostgreSQL(PostgreSQL::new(s.to_string()))),
@@ -93,12 +96,12 @@ impl OutputFormat {
         schema: Arc<Schema>,
         path: &Path,
     ) -> Result<()> {
-        let file = fs::File::options().write(true).open(path).unwrap();
+        let file = fs::File::options().write(true).open(path)?;
 
         match self {
             OutputFormat::Parquet => {
                 // write to parquet
-                let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();
+                let mut writer = ArrowWriter::try_new(file, schema, None)?;
 
                 while !rx.is_closed() {
                     if let Some(batch) = rx.recv().await {
@@ -113,7 +116,7 @@ impl OutputFormat {
                 let mut writer = arrow::csv::writer::Writer::new(file);
                 while !rx.is_closed() {
                     if let Some(batch) = rx.recv().await {
-                        writer.write(&batch).unwrap();
+                        writer.write(&batch)?;
                     }
                 }
                 Ok(())
@@ -126,7 +129,7 @@ impl OutputFormat {
 
                 while !rx.is_closed() {
                     if let Some(batch) = rx.recv().await {
-                        writer.write(&batch).unwrap();
+                        writer.write(&batch)?;
                     }
                 }
                 writer.finish()?;

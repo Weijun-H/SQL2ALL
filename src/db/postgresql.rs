@@ -84,9 +84,7 @@ impl Query for PostgreSQL {
         let postgres = PostgreSQL::new(self.url.clone());
 
         let (client, connection) =
-            tokio_postgres::connect(postgres.url.as_str(), tokio_postgres::NoTls)
-                .await
-                .unwrap();
+            tokio_postgres::connect(postgres.url.as_str(), tokio_postgres::NoTls).await?;
 
         tokio::spawn(async move {
             if let Err(e) = connection.await {
