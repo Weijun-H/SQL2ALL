@@ -8,6 +8,10 @@
 
 SQL2ALL is a simple tool that allows you to asynchronically store your SQL queries in any format you like and then run them against any database you like. It is designed to be simple to use and easy to extend.
 
+<p align="center">
+    <img src="img/process.png" alt="Image" height="200">
+</p>
+
 ## Roadmap
 
 Support for the following databases is included:
